@@ -71,6 +71,7 @@
     const codes = {
       height: "8302-2",
       bloodPressure: "85354-9",
+      legacyBloodPressure: "55284-4",
       systolic: "8480-6",
       diastolic: "8462-4",
       hdl: "2085-9",
@@ -78,6 +79,10 @@
     };
     const loinc = "http://loinc.org";
     const missing = "Not recorded";
+    const measurementFormat = new Intl.NumberFormat("en-US", {
+      minimumFractionDigits: 1,
+      maximumFractionDigits: 1
+    });
     const params = new URLSearchParams(location.search);
     const cameBackFromAuth = params.has("code") || params.has("error") || params.has("state");
     const pageStatus = document.getElementById("page-status");
@@ -118,8 +123,8 @@
     // Read the Patient name, gender, and birth date to fill in the identity section and calculate age.
     function showPatient(patient) {
       document.getElementById("name").textContent = formatName(patient);
-      document.getElementById("gender").textContent = patient.gender || missing;
-      document.getElementById("birth-date").textContent = patient.birthDate || missing;
+      document.getElementById("gender").textContent = formatGender(patient.gender);
+      document.getElementById("birth-date").textContent = formatCalendarDate(patient.birthDate);
       document.getElementById("age").textContent = formatAge(patient.birthDate);
       document.getElementById("record").hidden = false;
     }
@@ -184,7 +189,8 @@
 
     // Read the valueQuantity's unit, falling back to its code when the display unit is absent.
     function quantityUnit(quantity) {
-      return quantity?.unit || quantity?.code || "";
+      const unit = quantity?.unit || quantity?.code || "";
+      return unit === "mm[Hg]" ? "mmHg" : unit;
     }
 
     // Read valueQuantity and show the number with its unit, or “Not recorded” for a missing value.
@@ -192,14 +198,15 @@
       const row = document.getElementById(id);
       const quantity = observation?.valueQuantity;
       row.textContent = Number.isFinite(quantity?.value)
-        ? [quantity.value, quantityUnit(quantity)].filter(part => part !== "").join(" ")
+        ? [measurementFormat.format(quantity.value), quantityUnit(quantity)].filter(part => part !== "").join(" ")
         : missing;
       showResultDate(row, resultDate(observation));
     }
 
-    // Read the latest panel's component quantities, or use standalone pressure readings if there is no panel.
+    // Read the newest standard panel, the sandbox's legacy panel, or standalone pressure readings.
     function showBloodPressure(observations) {
-      const panel = latest(observations, codes.bloodPressure);
+      const panel = latest(observations, codes.bloodPressure) ||
+        latest(observations, codes.legacyBloodPressure);
       const systolic = panel || latest(observations, codes.systolic);
       const diastolic = panel || latest(observations, codes.diastolic);
       const upper = panel
@@ -213,10 +220,12 @@
       if (Number.isFinite(upper?.value) && Number.isFinite(lower?.value)) {
         const upperUnit = quantityUnit(upper);
         const lowerUnit = quantityUnit(lower);
+        const upperValue = measurementFormat.format(upper.value);
+        const lowerValue = measurementFormat.format(lower.value);
         row.textContent = upperUnit === lowerUnit
-          ? [upper.value + "/" + lower.value, upperUnit].filter(Boolean).join(" ")
-          : [upper.value, upperUnit].filter(part => part !== "").join(" ") + " / " +
-            [lower.value, lowerUnit].filter(part => part !== "").join(" ");
+          ? [upperValue + "/" + lowerValue, upperUnit].filter(Boolean).join(" ")
+          : [upperValue, upperUnit].filter(Boolean).join(" ") + " / " +
+            [lowerValue, lowerUnit].filter(Boolean).join(" ");
       }
 
       const upperDate = resultDate(systolic);
@@ -237,7 +246,7 @@
       const day = date.split("T")[0];
       const time = document.createElement("time");
       time.dateTime = day;
-      time.textContent = day;
+      time.textContent = formatCalendarDate(day);
       const line = document.createElement("span");
       line.className = "result-date";
       if (label) {
@@ -245,6 +254,32 @@
       }
       line.append(time);
       row.append(line);
+    }
+
+    // Format the recorded calendar date for birth dates and results, keeping partial dates as recorded.
+    function formatCalendarDate(date) {
+      if (!date) {
+        return missing;
+      }
+      const day = date.split("T")[0];
+      if (day.length === 4) {
+        return day;
+      }
+      const calendarDate = new Date(day);
+      if (Number.isNaN(calendarDate.getTime())) {
+        return missing;
+      }
+      const options = { year: "numeric", month: "short", timeZone: "UTC" };
+      if (day.length === 10) {
+        options.day = "numeric";
+      }
+      return calendarDate.toLocaleDateString("en-US", options);
+    }
+
+    // Turn the Patient.gender code into its display label, such as M for male.
+    function formatGender(gender) {
+      const labels = { male: "M", m: "M", female: "F", f: "F", other: "Other", unknown: "Unknown" };
+      return labels[gender?.toLowerCase()] || missing;
     }
 
     // FHIR Patient.name is a list. Prefer the official name, then the first one.
